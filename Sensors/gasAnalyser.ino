@@ -6,6 +6,13 @@
 #include <MQUnifiedsensor.h>
 #include "EspMQTTClient.h"
 
+#define LEDRED D0
+#define LEDGREEN D5
+#define LEDBLUE D6
+
+unsigned long lastBlink;
+bool secondVisible = 1;
+
 EspMQTTClient client(
   "hamann",
   "Dl34pmkU",
@@ -28,22 +35,28 @@ RTC_DS1307 rtc;
 char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
 // Датчик MQ-9
-#define Board              ("Wemos D1 mini")
-#define Pin                (D3)
+#define Board              ("ESP8266")
+#define Pin                (A0)
 #define Type               ("MQ-9")
 #define Voltage_Resolution (5)
 #define ADC_Bit_Resolution (10)
 #define RatioMQ9CleanAir   (9.6) 
 MQUnifiedsensor MQ9(Board, Voltage_Resolution, ADC_Bit_Resolution, Pin, Type);
 
-void setup()
-{
-  Serial.begin(115200);
+void setup() {
+  Serial.begin(9600);
 // Инициализация дисплея OLED SSD1306
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
   }
+// Инициализация RGB-светодиода  
+  pinMode(LEDRED, OUTPUT);
+  pinMode(LEDGREEN, OUTPUT);
+  pinMode(LEDBLUE, OUTPUT);
+  digitalWrite(LEDRED, LOW);
+  digitalWrite(LEDGREEN, LOW);
+  digitalWrite(LEDBLUE, LOW);
 
 // Инициализация RTC DS1307
 #ifndef ESP8266
@@ -75,17 +88,14 @@ void setup()
   
   display.display();
   delay(2000);
-
 }
 
 // This function is called once everything is connected (Wifi and MQTT)
 // WARNING : YOU MUST IMPLEMENT IT IF YOU USE EspMQTTClient
-void onConnectionEstablished()
-{
+void onConnectionEstablished() {
 }
 
-void loop()
-{
+void loop() {
   MQ9.update();
   MQ9.setA(1000.5); MQ9.setB(-2.186);
   float LPG = MQ9.readSensor();
@@ -93,6 +103,16 @@ void loop()
   float CH4 = MQ9.readSensor();
   MQ9.setA(599.65); MQ9.setB(-2.244);
   float CO = MQ9.readSensor();
+// Индикация светодиодом
+  if ((LPG < 50) && (CH4 < 50) && (CO < 50)) {
+    digitalWrite(LEDRED, LOW);
+    digitalWrite(LEDGREEN, HIGH);
+    digitalWrite(LEDBLUE, LOW);
+  } else {
+    digitalWrite(LEDRED, HIGH);
+    digitalWrite(LEDGREEN, LOW);
+    digitalWrite(LEDBLUE, LOW);
+  }
 
   DateTime now = rtc.now();
 
@@ -128,7 +148,14 @@ void loop()
   } else {
     display.print(now.hour());
   }
-  display.print(":");
+  lastBlink = millis();
+  if (secondVisible == 1 && (millis() - lastBlink < 1000)) {
+    display.print(":");
+    secondVisible = 0;
+  } else {
+    display.print(" ");
+    secondVisible = 1;
+  }
   if (now.minute() < 10) {
     display.print("0");
     display.print(now.minute());
