@@ -137,13 +137,13 @@ void loop() {
     digitalWrite(LEDGREEN, HIGH);
     digitalWrite(LEDBLUE, LOW);
 //    digitalWrite(FANPIN, LOW);
-//    payload = 0;
+    screenPos = 0;
   } else {
     digitalWrite(LEDRED, HIGH);
     digitalWrite(LEDGREEN, LOW);
     digitalWrite(LEDBLUE, LOW);
 //    digitalWrite(FANPIN, HIGH);
-//    payload = 1;
+    screenPos = 1;
   }
 
   DateTime now = rtc.now();
