@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include "Adafruit_Sensor.h"
+#include "Adafruit_AM2320.h"
 #include <RTClib.h>
 #include <MQUnifiedsensor.h>
 #include "EspMQTTClient.h"
@@ -9,10 +11,17 @@
 #define LEDRED D0
 #define LEDGREEN D5
 #define LEDBLUE D6
+#define BTNPIN 13   // pin D7
+#define FANPIN D8
 
 unsigned long lastBlink;
 bool secondVisible = 1;
+bool btnLast = LOW;
+bool btnCurrent = LOW;
+bool screenPos = 0;
+String payloadLocal = "off";
 
+// Клиент MQTT
 EspMQTTClient client(
   "hamann",
   "Dl34pmkU",
@@ -43,20 +52,28 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 #define RatioMQ9CleanAir   (9.6) 
 MQUnifiedsensor MQ9(Board, Voltage_Resolution, ADC_Bit_Resolution, Pin, Type);
 
+// Датчик температуры и влажности AM2320
+Adafruit_AM2320 am2320 = Adafruit_AM2320();
+
 void setup() {
   Serial.begin(9600);
+
 // Инициализация дисплея OLED SSD1306
   if(!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
     for(;;); // Don't proceed, loop forever
   }
-// Инициализация RGB-светодиода  
+    
+// Инициализация кнопки и RGB-светодиода  
+  pinMode(BTNPIN, INPUT);
   pinMode(LEDRED, OUTPUT);
   pinMode(LEDGREEN, OUTPUT);
   pinMode(LEDBLUE, OUTPUT);
+  pinMode(FANPIN, OUTPUT);
   digitalWrite(LEDRED, LOW);
   digitalWrite(LEDGREEN, LOW);
   digitalWrite(LEDBLUE, LOW);
+  digitalWrite(FANPIN, LOW);
 
 // Инициализация RTC DS1307
 #ifndef ESP8266
@@ -85,6 +102,11 @@ void setup() {
   }
   MQ9.setR0(calcR0/10);
   Serial.println("  done!.");
+
+// Инициализация датчика AM2320  
+  am2320.begin();
+
+  client.publish("wemos/fan/set", "off");
   
   display.display();
   delay(2000);
@@ -96,6 +118,12 @@ void onConnectionEstablished() {
 }
 
 void loop() {
+  btnCurrent = digitalRead(BTNPIN);
+  if ((btnCurrent == HIGH)) {
+    screenPos = !screenPos;
+  }
+ 
+// Получаем данные с датччика MQ-9  
   MQ9.update();
   MQ9.setA(1000.5); MQ9.setB(-2.186);
   float LPG = MQ9.readSensor();
@@ -104,17 +132,25 @@ void loop() {
   MQ9.setA(599.65); MQ9.setB(-2.244);
   float CO = MQ9.readSensor();
 // Индикация светодиодом
-  if ((LPG < 50) && (CH4 < 50) && (CO < 50)) {
+  if ((LPG < 40) && (CH4 < 50) && (CO < 35)) {
     digitalWrite(LEDRED, LOW);
     digitalWrite(LEDGREEN, HIGH);
     digitalWrite(LEDBLUE, LOW);
+//    digitalWrite(FANPIN, LOW);
+//    payload = 0;
   } else {
     digitalWrite(LEDRED, HIGH);
     digitalWrite(LEDGREEN, LOW);
     digitalWrite(LEDBLUE, LOW);
+//    digitalWrite(FANPIN, HIGH);
+//    payload = 1;
   }
 
   DateTime now = rtc.now();
+
+// Получаем данные с датчика AM2320
+  float temperature = am2320.readTemperature();
+  float humidity = am2320.readHumidity();
 
 // Вывод даты на дисплей
   display.clearDisplay();
@@ -163,24 +199,53 @@ void loop() {
     display.print(now.minute());
   }
 
-// Вывод на дисплей концентрации газов
-  display.setTextSize(1);
-  display.setCursor(0,27);
-  display.print("LPG: "); display.print(LPG);
-  display.setCursor(50,27); display.print("   ppm");
-  display.setCursor(0,42);
-  display.print("CH4: "); display.print(CH4);
-  display.setCursor(50,42); display.print("   ppm");
-  display.setCursor(0,57);
-  display.print("CO:  "); display.print(CO);
-  display.setCursor(50,57); display.print("   ppm");
+  switch (screenPos) {
+    case 0:
+      display.setTextSize(1); display.setCursor(0,34); display.print("Temp: ");
+      display.setTextSize(2); display.setCursor(40,27); display.print(temperature, 1);
+      display.setTextSize(1); display.setCursor(100,34); display.print((char)247); display.print("C");
+      display.setTextSize(1); display.setCursor(0,55); display.print("Humi: ");
+      display.setTextSize(2); display.setCursor(40,48); display.print(humidity, 1);
+      display.setTextSize(1); display.setCursor(100,55); display.print("%");
+      break;
+    case 1:
+      // Вывод на дисплей концентрации газов
+      display.setTextSize(1);
+      display.setCursor(0,27);
+      display.print("LPG: "); display.print(LPG);
+      display.setCursor(50,27); display.print("   ppm");
+      display.setCursor(0,42);
+      display.print("CH4: "); display.print(CH4);
+      display.setCursor(50,42); display.print("   ppm");
+      display.setCursor(0,57);
+      display.print("CO:  "); display.print(CO);
+      display.setCursor(50,57); display.print("   ppm");
+      break;
+  }
   display.display();
-
+  
   client.publish("wemos/mq9/lpg", String(LPG));
   client.publish("wemos/mq9/ch4", String(CH4));
   client.publish("wemos/mq9/co", String(CO));
+  client.publish("wemos/am2320/temperature", String(temperature, 1));
+  client.publish("wemos/am2320/humidity", String(humidity, 0));
   client.publish("wemos/online", "Подключено");
-
+  client.publish("wemos/state_topic", "1");
+  client.publish("wemos/fan/set", payloadLocal);
+  
+  client.subscribe("home/kitchen/fan/set", [](const String & payload) {
+    
+    if (payload == "1") {
+      payloadLocal = "on";
+      digitalWrite(FANPIN, HIGH);
+//      client.publish("wemos/fan/set", "on");
+    } else {
+      payloadLocal = "off";
+      digitalWrite(FANPIN, LOW);
+//      client.publish("wemos/fan/set", "off");
+    }
+  });
+  
 //  Serial.println(LPG);
 //  Serial.println(CH4);
 //  Serial.println(CO);
